@@ -1,3 +1,12 @@
+/*
+ * Versão 2:
+ * Setando o dia para verificação se já se passou um dia para averiguar se o consumo está de acordo com o planejado
+ * Renomeei a função printLocalTime para TIMERegister
+ * Criei a função tarifa(int hora) para informar qual será o preço pago por kWh analisando o horário. OBS.: Futuramente será realizado de 
+forma online
+ * Está sendo feito a verificação do mês em atividade para definir qual será o consumo médio diário que esperasse ser seguido
+ * Está sendo realizado a contagem de quanto está sendo consumido em R$ e sendo salvo o último valor
+*/
 #include <ThingSpeak.h>
 #include "EmonLib.h"
 #include <driver/adc.h>
@@ -47,6 +56,14 @@ String dataread, dateRegister;
 float kWh, sV, pF, aP, rP;
 double Irms;
 
+/*
+ * tarHP: de 18 hrs as 21 hrs 
+ * tarHI: de 17 hrs as 18 hrs e de 21 hrs a 22 hrs
+ * tarHFP: O restante
+*/
+float conESPE_R$ = 10.50, conDIA_R$, con_R$ = 0, tar;//Todos valores simulados
+int dias = 1, d_atual, flag_setup = 0; 
+
 int blue = 33, green = 32, error_rP = 2;
 /*
    green -> indica se conseguiu enviar para web
@@ -54,18 +71,58 @@ int blue = 33, green = 32, error_rP = 2;
 */
 
 
-int sumrec[500],i=0,j, agrupar= 0;
+int sumrec_con_R$[500], sumrec_kWh[500], i=0 , j, agrupar_con_R$ = 0, agrupar_kWh = 0;
 EnergyMonitor emon;
 WiFiServer server(80);
 WiFiClient client;
 
 //-----------------Funcoes----------------------------------------
-void printLocalTime() {
+float tarifa(int hora){
+  if(hora >= 18 && hora < 21){
+    Serial.println("Horário em vigor: Horário  de Ponta");
+    return 0.4; 
+  }
+  else if(hora == 17 || hora == 21){
+    Serial.println("Horário em vigor: Horário Intermediario");
+    return 0.3;
+  }
+  else{
+    Serial.println("Horário em vigor: Horário Fora de Ponta");
+    return 0.2;
+  }
+}
+
+void TIMERegister() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
     Serial.println("Falha ao obter a hora");
     return;
   }
+
+  //Seta o dia atual que está
+  if(flag_setup == 0){
+    d_atual = timeinfo.tm_mday;
+    flag_setup = 1;
+  }
+  
+  //Faz a verificação do horário para determinar qual o valor do horário em vigor
+  tar = tarifa(timeinfo.tm_hour);//Futuramente será definido de forma online
+  Serial.print("\ntar: ");Serial.println(tar);
+  
+  //Verifica o mês que está em vigor para definir o consumo médio diário
+  if((timeinfo.tm_mon + 1) == 1 || (timeinfo.tm_mon + 1)== 3 || (timeinfo.tm_mon + 1) == 5 || (timeinfo.tm_mon + 1) == 7 || (timeinfo.tm_mon + 1) == 8 || (timeinfo.tm_mon + 1) == 10 || (timeinfo.tm_mon + 1) == 12){
+    conDIA_R$ = conESPE_R$ / 31;
+  }
+  else if((timeinfo.tm_mon + 1) == 4 || (timeinfo.tm_mon + 1) == 6 || (timeinfo.tm_mon + 1) == 9 || (timeinfo.tm_mon + 1) == 11){
+    conDIA_R$ = conESPE_R$ / 30;
+  }
+  else{
+    conDIA_R$ = conESPE_R$ / 28;
+  }
+
+  Serial.print("Consumo médio por dia: ");Serial.println(conDIA_R$);  
+  
+  
   Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
   //Mes/dia/ano - H:M:S
   dateRegister = String(timeinfo.tm_mday) + "/" + String(timeinfo.tm_mon + 1)   + "/" + String(timeinfo.tm_year + 1900) + " - " + String(timeinfo.tm_hour) + ":" + String(timeinfo.tm_min) + ":" + String(timeinfo.tm_sec);
@@ -74,31 +131,57 @@ void printLocalTime() {
  
   appendFile(SD, "/data.txt", dateRegister + "\t" + dataread + "\r\n");
   writeFile(SD, "/kWh.txt", String((int)(kWh*1000000)));
+  writeFile(SD, "/con_R$.txt", String((int)(con_R$*1000000)));
   Serial.println((int)(kWh*1000000));
 }
 
-void readFile(fs::FS &fs, const char * path){
-    Serial.printf("Reading file: %s\n", path);
-
-    File file = fs.open(path);
-    if(!file || file.isDirectory()){
-        Serial.println("Failed to open file for reading");
+void readFile(fs::FS &fs){
+    Serial.printf("Reading file: %s\n",  "/kWh.txt");
+    
+    File file_kWh = fs.open("/kWh.txt");
+    if(!file_kWh || file_kWh.isDirectory()){
+        Serial.println("Failed to open file_kWh for reading");
         return;
     }
 
-    Serial.print("\nRead from file: ");
-    while(file.available()){
-        sumrec[i] = file.read();
+    Serial.print("\nRead from file_kWh: ");
+    while(file_kWh.available()){
+        sumrec_kWh[i] = file_kWh.read();
         i=i+1;
     }
     for(j = 0; j < i; j++)
     {
-      Serial.println(sumrec[j]);
-      agrupar = agrupar + (sumrec[j]-48)*pow(10,i-j-1);
+      Serial.println(sumrec_kWh[j]);
+      agrupar_kWh = agrupar_kWh + (sumrec_kWh[j]-48)*pow(10,i-j-1);
     }
-    Serial.println(agrupar);
-    kWh = float(agrupar)/1000000;
+    Serial.println(agrupar_kWh);
+    kWh = float(agrupar_kWh)/1000000;
     i=0;
+
+
+
+    Serial.printf("Reading file: %s\n",  "/con_R$.txt");
+    
+    File file_con_R$ = fs.open("/con_R$.txt");
+    if(!file_con_R$ || file_con_R$.isDirectory()){
+        Serial.println("Failed to open file_con_R$ for reading");
+        return;
+    }
+
+    Serial.print("\nRead from file_con_R$: ");
+    while(file_con_R$.available()){
+        sumrec_con_R$[i] = file_con_R$.read();
+        i=i+1;
+    }
+    for(j = 0; j < i; j++)
+    {
+      Serial.println(sumrec_con_R$[j]);
+      agrupar_con_R$ = agrupar_con_R$ + (sumrec_con_R$[j]-48)*pow(10,i-j-1);
+    }
+    Serial.println(agrupar_con_R$);
+    con_R$ = float(agrupar_con_R$)/1000000;
+    i=0;
+    
     Serial.print("\n");
 }
 
@@ -219,8 +302,9 @@ void setup() {
     //return;    // init failed
   }
 
-  readFile(SD, "/kWh.txt");
-  
+  //Ler os arquivos a fim de pegar os valores armazenados
+  readFile(SD);
+    
   // If the data.txt file doesn't exist
   // Create a file on the SD card and write the data labels
   File file = SD.open("/data.txt");
@@ -247,6 +331,19 @@ void setup() {
   }
   file_kWh.close();
 
+    // Create a file on the SD card and write con_R$
+  File file_con_R$ = SD.open("/con_R$.txt");
+  if (!file_con_R$) {
+    Serial.println("File doens't exist");
+    Serial.println("Creating file...");
+    writeFile(SD, "/con_R$.txt", " ");
+    con_R$ = 0;
+  }
+  else {
+    Serial.println("File already exists");
+  }
+  file_con_R$.close();
+
   //  //connect to WiFi--------------------------------------------------
   Serial.printf("Conectando em %s ", ssid);
   WiFi.begin(ssid, password);
@@ -257,7 +354,7 @@ void setup() {
   Serial.println(" Feito");
 
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  printLocalTime();
+  TIMERegister();
   ThingSpeak.begin(client);  // Initialize ThingSpeak
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
@@ -286,6 +383,7 @@ void loop() {
     digitalWrite(error_rP, LOW);
     if ((millis() - lastTime3) >= timerDelay3) {
       kWh = kWh + (rP / 3600) / 1000;
+      con_R$ = con_R$ + ((rP / 3600) / 1000)*tar;
       lastTime3 = millis();
     }
 
@@ -310,10 +408,12 @@ void loop() {
       Serial.println(pF);
       Serial.print("kWh*1000000: ");
       Serial.println(kWh * 1000000);
+      Serial.print("con_R$*1000000: ");
+      Serial.println(con_R$ * 1000000);
       Serial.println("rP , aP , Vrms , Irms , pF");
       //emon.serialprint();
 
-      printLocalTime();
+      TIMERegister();
       lastTime2 = millis();
     }
   }
