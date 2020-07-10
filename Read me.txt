@@ -1,0 +1,5 @@
+Primeiros passos para modificação do arquivo:
+Carregue o que está no GitHub
+Faça as modificações necessárias em um braço, para não compremeter o master
+Comente a versão
+Envie para o GitHub
