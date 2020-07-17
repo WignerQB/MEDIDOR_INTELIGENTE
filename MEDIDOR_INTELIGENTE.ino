@@ -1,10 +1,9 @@
-/*
- * Versão 3:
- * Envia o fator de potência, o valor do kWh e o consumo em R$ para o ThingSpeak
- * Está fazendo o backup do marcador de dia(uma lógica que será feito testes constantes para ver se o dia mudou, caso tenha mudado o dia
- * será análisado o consumo referente aquele dia para ver se está dentro do permitido)
- * Retirada de Serial.print's que auxiliavam na estruturação do código
- * Os valores consumidos em R$ foram salvos no SD
+/*   
+ * Versão 4:   
+ * Está sendo enviado do consumo total em R$   
+ * Foi retirado o valor da fator de potência que estava sendo enviado
+ * Faz a verificação se o valor a ser pago está dentro do planejamento diário
+ * Exibe uma mensagem informando sobre a ultrapassagem do valor planejado
 */
 #include <ThingSpeak.h>
 #include "EmonLib.h"
@@ -62,15 +61,15 @@ double Irms;
 */
 
 /*
- * custo_ESPERADO: consumo esperado a ser pago pelo consumidor
- * custoPLAN_DIA: consumo em R$ planejado por dia
- * consumido_total: consumo total da energia em R$
- * consumido_DIA: O quanto foi consumido durante um dia
+   custo_ESPERADO: consumo esperado a ser pago pelo consumidor
+   custoPLAN_DIA: consumo em R$ planejado por dia
+   consumido_total: consumo total da energia em R$
+   consumido_DIA: O quanto foi consumido durante um dia
 */
 float custo_ESPERADO = 10.50, custoPLAN_DIA, consumido_DIA = 0, consumido_total = 0, tar;//Todos valores simulados
 int dias = 1, marc_dia, flag_setup = 0;
 
-int blue = 33, green = 32, error_rP = 2;
+int blue = 33, green = 32, LED_ERROR = 2, PLAN_ERROR = 0;
 /*
    green -> indica se conseguiu enviar para web
    blue -> indica se conseguiu gravar no SD card
@@ -103,11 +102,11 @@ void SD_config() {
     //return;    // init failed
   }
 
-  
+
   //Ler os arquivos a fim de pegar os valores armazenados
   readFile(SD);
 
-  
+
   // If the data.txt file doesn't exist
   // Create a file on the SD card and write the data labels
   File file = SD.open("/data.txt");
@@ -177,15 +176,15 @@ void SD_config() {
 
 float tarifa(int hora) {
   if (hora >= 18 && hora < 21) {
-    Serial.println("Horário em vigor: Horário  de Ponta");
+    Serial.println("\nHorário em vigor: Horário  de Ponta");
     return 0.4;
   }
   else if (hora == 17 || hora == 21) {
-    Serial.println("Horário em vigor: Horário Intermediario");
+    Serial.println("\nHorário em vigor: Horário Intermediario");
     return 0.3;
   }
   else {
-    Serial.println("Horário em vigor: Horário Fora de Ponta");
+    Serial.println("\nHorário em vigor: Horário Fora de Ponta");
     return 0.2;
   }
 }
@@ -204,17 +203,25 @@ void TIMERegister() {
     flag_setup = 1;
   }
 
-  if(marc_dia != timeinfo.tm_mday){//Atualiza a variável marc_dia e atualiza o arquivo txt
+  if (marc_dia != timeinfo.tm_mday) { //Atualiza a variável marc_dia e atualiza o arquivo txt
     marc_dia = timeinfo.tm_mday;
     writeFile(SD, "/marc_dia.txt", String(marc_dia));
     //Verificar se o consumo do dia está dentro do planejado
     consumido_total = consumido_total + consumido_DIA;
-    
-    //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------    
-    
+
+    //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------
+    if (consumido_DIA <= custoPLAN_DIA) {
+      PLAN_ERROR = 0;
+    }
+    else {
+      digitalWrite(LED_ERROR, HIGH);
+      PLAN_ERROR = 1;
+      Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!\n\n\n\n\n\n");
+    }
+
     consumido_DIA = 0;
   }
-  
+
   //Verifica o mês que está em vigor para definir o consumo médio diário
   if ((timeinfo.tm_mon + 1) == 1 || (timeinfo.tm_mon + 1) == 3 || (timeinfo.tm_mon + 1) == 5 || (timeinfo.tm_mon + 1) == 7 || (timeinfo.tm_mon + 1) == 8 || (timeinfo.tm_mon + 1) == 10 || (timeinfo.tm_mon + 1) == 12) {
     custoPLAN_DIA = custo_ESPERADO / 31;
@@ -228,9 +235,9 @@ void TIMERegister() {
 
   //Faz a verificação do horário para determinar qual o valor do horário em vigor
   tar = tarifa(timeinfo.tm_hour);//Futuramente será definido de forma online
-  Serial.print("\ntar: "); Serial.println(tar);
+  Serial.print("Valor do kWh: "); Serial.println(tar);
 
-  Serial.print("Consumo médio por dia: "); Serial.println(custoPLAN_DIA);
+  Serial.print("\nConsumo médio por dia: "); Serial.println(custoPLAN_DIA);
 
 
   Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
@@ -300,7 +307,7 @@ void readFile(fs::FS &fs) {
     sumrec_consumido_total[i] = file_consumido_total.read();
     i = i + 1;
   }
-  for (j = 0; j < i; j++){
+  for (j = 0; j < i; j++) {
     agrupar_consumido_total = agrupar_consumido_total + (sumrec_consumido_total[j] - 48) * pow(10, i - j - 1);
   }
   consumido_total = float(agrupar_consumido_total) / 1000000;
@@ -395,9 +402,9 @@ void ThingSpeakPost() {
     // Set o campo do canal com o valor
     ThingSpeak.setField(1, (float)Irms); //Envia o valor da corrente
     ThingSpeak.setField(2, sV);          //Envia o valor da tensão
-    ThingSpeak.setField(3, pF);          //Envia o valor do fator de potência
-    ThingSpeak.setField(4, kWh);         //Envia o valor do consumo em kWh
-    ThingSpeak.setField(5, consumido_DIA);      //Envia o valor do consumo em R$
+    ThingSpeak.setField(3, consumido_total);          //Envia o valor do fator de potência
+    ThingSpeak.setField(4, consumido_DIA);         //Envia o valor do consumo em kWh
+    ThingSpeak.setField(5, kWh);      //Envia o valor do consumo em R$
     ThingSpeak.setField(6, tar);         //Envia o valor do kWh do horário em questão
 
     int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);   // Escrever no canal do ThingSpeak
@@ -423,8 +430,8 @@ void ThingSpeakPost() {
 void setup() {
   pinMode(green, OUTPUT);
   pinMode(blue, OUTPUT);
-  pinMode(error_rP, OUTPUT);
-  digitalWrite(error_rP, LOW);
+  pinMode(LED_ERROR, OUTPUT);
+  digitalWrite(LED_ERROR, LOW);
   digitalWrite(green, LOW);
   digitalWrite(blue, LOW);
   adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
@@ -465,12 +472,14 @@ void loop() {
 
 
   if (rP < 0) { //Caso a potência seja negativa, inverter o CT sensor
-    digitalWrite(error_rP, HIGH);
+    digitalWrite(LED_ERROR, HIGH);
     digitalWrite(green, LOW);
     digitalWrite(blue, LOW);
   }
   else {
-    digitalWrite(error_rP, LOW);
+    if (PLAN_ERROR == 0) {
+      digitalWrite(LED_ERROR, LOW);
+    }
     if ((millis() - lastTime3) >= timerDelay3) {
       kWh = kWh + (rP / 3600) / 1000;
       consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
