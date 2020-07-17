@@ -1,9 +1,6 @@
-/*   
- * Versão 4:   
- * Está sendo enviado do consumo total em R$   
- * Foi retirado o valor da fator de potência que estava sendo enviado
- * Faz a verificação se o valor a ser pago está dentro do planejamento diário
- * Exibe uma mensagem informando sobre a ultrapassagem do valor planejado
+/*
+ * Versao 4 otimizada  
+ * Dei uma pequena organizada no código
 */
 #include <ThingSpeak.h>
 #include "EmonLib.h"
@@ -78,7 +75,18 @@ int blue = 33, green = 32, LED_ERROR = 2, PLAN_ERROR = 0;
 
 int sumrec_consumido_DIA[500], sumrec_kWh[500], sumrec_marc_dia[500], agrupar_marc_dia = 0, agrupar_consumido_DIA = 0, agrupar_kWh = 0;
 int sumrec_consumido_total[500], agrupar_consumido_total = 0;
-int i = 0 , j;
+int i = 0 , j, caseTR = 0;
+
+enum ENUM {
+  f_medicao,
+  incrementar,
+  Enviar_TS,
+  backupSD,
+  printar
+};
+
+ENUM estado = f_medicao, estado_antigo;
+
 EnergyMonitor emon;
 WiFiServer server(80);
 WiFiClient client;
@@ -193,63 +201,75 @@ void TIMERegister() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
     Serial.println("Falha ao obter a hora");
+    dateRegister = String(timeinfo.tm_mday) + "/" + String(timeinfo.tm_mon + 1)   + "/" + String(timeinfo.tm_year + 1900) + " - " + String(timeinfo.tm_hour) + ":" + String(timeinfo.tm_min) + ":" + String(timeinfo.tm_sec);
+    Serial.println(dateRegister);
+    dataread = "Vrms: " + String(sV) + " V; " + "Irms: " + String(Irms) + " A; " + "Fator de Potência: " + String(pF) + "; Potência Real: " + String(rP) + " W; " + "Apparent Power: " + String(aP) + " VA; " + "Energia consumida: " + String(kWh);
+
+    appendFile(SD, "/data.txt", dateRegister + "\t" + dataread + "\r\n");
+    writeFile(SD, "/kWh.txt", String((int)(kWh * 1000000)));
+    writeFile(SD, "/consumido_DIA.txt", String((int)(consumido_DIA * 1000000)));
+    writeFile(SD, "/consumido_total.txt", String((int)(consumido_total * 1000000)));
     return;
   }
 
-  //Seta o dia atual para inicializar a aplicação
-  if (flag_setup == 0) {
-    marc_dia = timeinfo.tm_mday;
-    writeFile(SD, "/marc_dia.txt", String(marc_dia));
-    flag_setup = 1;
+  
+  switch (caseTR) {
+    case 0: //Todas as tarefas que só são necessárias serem feitas 1 vez, salvo alguma exceção
+      marc_dia = timeinfo.tm_mday;
+      writeFile(SD, "/marc_dia.txt", String(marc_dia));
+      //Verifica o mês que está em vigor para definir o consumo médio diário
+      if ((timeinfo.tm_mon + 1) == 1 || (timeinfo.tm_mon + 1) == 3 || (timeinfo.tm_mon + 1) == 5 || (timeinfo.tm_mon + 1) == 7 || (timeinfo.tm_mon + 1) == 8 || (timeinfo.tm_mon + 1) == 10 || (timeinfo.tm_mon + 1) == 12) {
+        custoPLAN_DIA = custo_ESPERADO / 31;
+      }
+      else if ((timeinfo.tm_mon + 1) == 4 || (timeinfo.tm_mon + 1) == 6 || (timeinfo.tm_mon + 1) == 9 || (timeinfo.tm_mon + 1) == 11) {
+        custoPLAN_DIA = custo_ESPERADO / 30;
+      }
+      else {
+        custoPLAN_DIA = custo_ESPERADO / 28;
+      }
+      caseTR = 1;
+      break;
+
+    case 1://Salva as informações no SD
+      Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+      //Mes/dia/ano - H:M:S
+      dateRegister = String(timeinfo.tm_mday) + "/" + String(timeinfo.tm_mon + 1)   + "/" + String(timeinfo.tm_year + 1900) + " - " + String(timeinfo.tm_hour) + ":" + String(timeinfo.tm_min) + ":" + String(timeinfo.tm_sec);
+      Serial.println(dateRegister);
+      dataread = "Vrms: " + String(sV) + " V; " + "Irms: " + String(Irms) + " A; " + "Fator de Potência: " + String(pF) + "; Potência Real: " + String(rP) + " W; " + "Apparent Power: " + String(aP) + " VA; " + "Energia consumida: " + String(kWh);
+
+      appendFile(SD, "/data.txt", dateRegister + "\t" + dataread + "\r\n");
+      writeFile(SD, "/kWh.txt", String((int)(kWh * 1000000)));
+      writeFile(SD, "/consumido_DIA.txt", String((int)(consumido_DIA * 1000000)));
+      writeFile(SD, "/consumido_total.txt", String((int)(consumido_total * 1000000)));
+      caseTR = 2;
+      break;
+
+    case 2: //Gerenciamento do consumo de energia
+      if (marc_dia != timeinfo.tm_mday) { //Atualiza a variável marc_dia e atualiza o arquivo txt
+        marc_dia = timeinfo.tm_mday;
+        writeFile(SD, "/marc_dia.txt", String(marc_dia));
+        //Verificar se o consumo do dia está dentro do planejado
+        consumido_total = consumido_total + consumido_DIA;
+    
+        //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------
+        if (consumido_DIA > custoPLAN_DIA) {
+          digitalWrite(LED_ERROR, HIGH);
+          Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!\n\n\n\n\n\n");          
+        }
+        else {
+
+        }
+        consumido_DIA = 0;
+      }
+      caseTR = 1;
+      break;
   }
 
-  if (marc_dia != timeinfo.tm_mday) { //Atualiza a variável marc_dia e atualiza o arquivo txt
-    marc_dia = timeinfo.tm_mday;
-    writeFile(SD, "/marc_dia.txt", String(marc_dia));
-    //Verificar se o consumo do dia está dentro do planejado
-    consumido_total = consumido_total + consumido_DIA;
-
-    //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------
-    if (consumido_DIA <= custoPLAN_DIA) {
-      PLAN_ERROR = 0;
-    }
-    else {
-      digitalWrite(LED_ERROR, HIGH);
-      PLAN_ERROR = 1;
-      Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!\n\n\n\n\n\n");
-    }
-
-    consumido_DIA = 0;
-  }
-
-  //Verifica o mês que está em vigor para definir o consumo médio diário
-  if ((timeinfo.tm_mon + 1) == 1 || (timeinfo.tm_mon + 1) == 3 || (timeinfo.tm_mon + 1) == 5 || (timeinfo.tm_mon + 1) == 7 || (timeinfo.tm_mon + 1) == 8 || (timeinfo.tm_mon + 1) == 10 || (timeinfo.tm_mon + 1) == 12) {
-    custoPLAN_DIA = custo_ESPERADO / 31;
-  }
-  else if ((timeinfo.tm_mon + 1) == 4 || (timeinfo.tm_mon + 1) == 6 || (timeinfo.tm_mon + 1) == 9 || (timeinfo.tm_mon + 1) == 11) {
-    custoPLAN_DIA = custo_ESPERADO / 30;
-  }
-  else {
-    custoPLAN_DIA = custo_ESPERADO / 28;
-  }
-
+  
   //Faz a verificação do horário para determinar qual o valor do horário em vigor
   tar = tarifa(timeinfo.tm_hour);//Futuramente será definido de forma online
   Serial.print("Valor do kWh: "); Serial.println(tar);
-
   Serial.print("\nConsumo médio por dia: "); Serial.println(custoPLAN_DIA);
-
-
-  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-  //Mes/dia/ano - H:M:S
-  dateRegister = String(timeinfo.tm_mday) + "/" + String(timeinfo.tm_mon + 1)   + "/" + String(timeinfo.tm_year + 1900) + " - " + String(timeinfo.tm_hour) + ":" + String(timeinfo.tm_min) + ":" + String(timeinfo.tm_sec);
-  Serial.println(dateRegister);
-  dataread = "Vrms: " + String(sV) + " V; " + "Irms: " + String(Irms) + " A; " + "Fator de Potência: " + String(pF) + "; Potência Real: " + String(rP) + " W; " + "Apparent Power: " + String(aP) + " VA; " + "Energia consumida: " + String(kWh);
-
-  appendFile(SD, "/data.txt", dateRegister + "\t" + dataread + "\r\n");
-  writeFile(SD, "/kWh.txt", String((int)(kWh * 1000000)));
-  writeFile(SD, "/consumido_DIA.txt", String((int)(consumido_DIA * 1000000)));
-  writeFile(SD, "/consumido_total.txt", String((int)(consumido_total * 1000000)));
 }
 
 void readFile(fs::FS &fs) {
@@ -402,9 +422,9 @@ void ThingSpeakPost() {
     // Set o campo do canal com o valor
     ThingSpeak.setField(1, (float)Irms); //Envia o valor da corrente
     ThingSpeak.setField(2, sV);          //Envia o valor da tensão
-    ThingSpeak.setField(3, consumido_total);          //Envia o valor do fator de potência
-    ThingSpeak.setField(4, consumido_DIA);         //Envia o valor do consumo em kWh
-    ThingSpeak.setField(5, kWh);      //Envia o valor do consumo em R$
+    ThingSpeak.setField(3, consumido_total);          //Envia o valor do consumo total em R$
+    ThingSpeak.setField(4, consumido_DIA);         //Envia o valor do consumo em R$
+    ThingSpeak.setField(5, kWh);      //Envia o valor do consumo em kWh
     ThingSpeak.setField(6, tar);         //Envia o valor do kWh do horário em questão
 
     int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);   // Escrever no canal do ThingSpeak
@@ -461,59 +481,76 @@ void setup() {
   lastTime = millis();
 }
 
+
 void loop() {
+  switch (estado) {//Funcionalidades
+    case f_medicao:
 
-  emon.calcVI(20, 2000);
-  sV   = emon.Vrms;
-  Irms = emon.calcIrms(1480);  // Calculate Irms only
-  rP = emon.realPower;
-  aP = emon.apparentPower;
-  pF = emon.powerFactor;
+      emon.calcVI(20, 2000);
+      sV   = emon.Vrms;
+      Irms = emon.calcIrms(1480);  // Calculate Irms only
+      rP = emon.realPower;
+      aP = emon.apparentPower;
+      pF = emon.powerFactor;
+      if (rP >= 0) {
+        estado = incrementar;
+      }
+      else {
+        digitalWrite(LED_ERROR, HIGH);
+        digitalWrite(green, LOW);
+        digitalWrite(blue, LOW);
+      }
+      break;
 
+    case incrementar:
+      if ((millis() - lastTime3) >= timerDelay3) {
+        kWh = kWh + (rP / 3600) / 1000;
+        consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
+        lastTime3 = millis();
+      }
+      estado = Enviar_TS;
+      break;
 
-  if (rP < 0) { //Caso a potência seja negativa, inverter o CT sensor
-    digitalWrite(LED_ERROR, HIGH);
-    digitalWrite(green, LOW);
-    digitalWrite(blue, LOW);
-  }
-  else {
-    if (PLAN_ERROR == 0) {
-      digitalWrite(LED_ERROR, LOW);
-    }
-    if ((millis() - lastTime3) >= timerDelay3) {
-      kWh = kWh + (rP / 3600) / 1000;
-      consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
-      lastTime3 = millis();
-    }
+    case Enviar_TS:
+      ThingSpeakPost();
+      estado = printar;
+      
+      break;
 
+    case printar:
+      if ((millis() - lastTime2) >= timerDelay2)
+      {
+        Serial.print(" Vrms: ");
+        Serial.print(sV);
+        Serial.print(" V     ");
+        Serial.print("Irms: ");
+        Serial.print(Irms);
+        Serial.print(" A     ");
+        Serial.print("Potência Real: ");
+        Serial.print(rP);
+        Serial.print(" W     ");
+        Serial.print("Potência Aparente: ");
+        Serial.print(aP);
+        Serial.print(" VA");
+        Serial.print("Fator de Potência: ");
+        Serial.println(pF);
+        Serial.print("kWh*1000000: ");
+        Serial.println(kWh * 1000000);
+        Serial.print("consumido_DIA*1000000: ");
+        Serial.println(consumido_DIA * 1000000);
+        Serial.println("rP , aP , Vrms , Irms , pF");
+        estado = backupSD;
+        delay(400);
+        lastTime2 = millis();
+      }
+      break;
 
-    ThingSpeakPost(); // Parâmetros: (Valor, campo)
-
-    if ((millis() - lastTime2) >= timerDelay2)
-    {
-      Serial.print(" Vrms: ");
-      Serial.print(sV);
-      Serial.print(" V     ");
-      Serial.print("Irms: ");
-      Serial.print(Irms);
-      Serial.print(" A     ");
-      Serial.print("Potência Real: ");
-      Serial.print(rP);
-      Serial.print(" W     ");
-      Serial.print("Potência Aparente: ");
-      Serial.print(aP);
-      Serial.print(" VA");
-      Serial.print("Fator de Potência: ");
-      Serial.println(pF);
-      Serial.print("kWh*1000000: ");
-      Serial.println(kWh * 1000000);
-      Serial.print("consumido_DIA*1000000: ");
-      Serial.println(consumido_DIA * 1000000);
-      Serial.println("rP , aP , Vrms , Irms , pF");
-      //emon.serialprint();
-
+    case backupSD:
       TIMERegister();
-      lastTime2 = millis();
-    }
+      estado = f_medicao;
+      break;
+
+    default :
+      break;
   }
 }
