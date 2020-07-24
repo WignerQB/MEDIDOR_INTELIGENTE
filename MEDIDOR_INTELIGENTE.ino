@@ -1,6 +1,7 @@
 /*
- * Versao 4 otimizada  
- * Dei uma pequena organizada no código
+ * Versao 5  
+ * Comentado os cases do código e algumas outras linhas de código para auxiliar na interpretação
+ * Inicializada a lógica de recalculamento da meta diária de consumo
 */
 #include <ThingSpeak.h>
 #include "EmonLib.h"
@@ -55,23 +56,19 @@ double Irms;
    tarHP: de 18 hrs as 21 hrs
    tarHI: de 17 hrs as 18 hrs e de 21 hrs a 22 hrs
    tarHFP: O restante
-*/
-
-/*
    custo_ESPERADO: consumo esperado a ser pago pelo consumidor
    custoPLAN_DIA: consumo em R$ planejado por dia
    consumido_total: consumo total da energia em R$
    consumido_DIA: O quanto foi consumido durante um dia
 */
 float custo_ESPERADO = 10.50, custoPLAN_DIA, consumido_DIA = 0, consumido_total = 0, tar;//Todos valores simulados
-int dias = 1, marc_dia, flag_setup = 0;
+int counterDia = 30, marc_dia, flag_setup = 0;
 
 int blue = 33, green = 32, LED_ERROR = 2, PLAN_ERROR = 0;
 /*
    green -> indica se conseguiu enviar para web
    blue -> indica se conseguiu gravar no SD card
 */
-
 
 int sumrec_consumido_DIA[500], sumrec_kWh[500], sumrec_marc_dia[500], agrupar_marc_dia = 0, agrupar_consumido_DIA = 0, agrupar_kWh = 0;
 int sumrec_consumido_total[500], agrupar_consumido_total = 0;
@@ -218,15 +215,7 @@ void TIMERegister() {
       marc_dia = timeinfo.tm_mday;
       writeFile(SD, "/marc_dia.txt", String(marc_dia));
       //Verifica o mês que está em vigor para definir o consumo médio diário
-      if ((timeinfo.tm_mon + 1) == 1 || (timeinfo.tm_mon + 1) == 3 || (timeinfo.tm_mon + 1) == 5 || (timeinfo.tm_mon + 1) == 7 || (timeinfo.tm_mon + 1) == 8 || (timeinfo.tm_mon + 1) == 10 || (timeinfo.tm_mon + 1) == 12) {
-        custoPLAN_DIA = custo_ESPERADO / 31;
-      }
-      else if ((timeinfo.tm_mon + 1) == 4 || (timeinfo.tm_mon + 1) == 6 || (timeinfo.tm_mon + 1) == 9 || (timeinfo.tm_mon + 1) == 11) {
-        custoPLAN_DIA = custo_ESPERADO / 30;
-      }
-      else {
-        custoPLAN_DIA = custo_ESPERADO / 28;
-      }
+      custoPLAN_DIA = custo_ESPERADO / 30;
       caseTR = 1;
       break;
 
@@ -245,27 +234,36 @@ void TIMERegister() {
       break;
 
     case 2: //Gerenciamento do consumo de energia
-      if (marc_dia != timeinfo.tm_mday) { //Atualiza a variável marc_dia e atualiza o arquivo txt
+      if (marc_dia != timeinfo.tm_mday) { //Verifica se houve a mudança de dia e atualiza a variável que faz o controle e o arquivo txt
         marc_dia = timeinfo.tm_mday;
+        counterDia --; 
         writeFile(SD, "/marc_dia.txt", String(marc_dia));
-        //Verificar se o consumo do dia está dentro do planejado
-        consumido_total = consumido_total + consumido_DIA;
+        consumido_total = consumido_total + consumido_DIA;//Incrementa na variável que contabiliza o consumo geral, em R$, a quantidade 
+        //consumida no mês
     
-        //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------
-        if (consumido_DIA > custoPLAN_DIA) {
+        if (consumido_DIA > custoPLAN_DIA) {//Sinaliza ao consumidor que este consumiu em um mais que o ideal e refaz os cálculos necessários
+          //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------
           digitalWrite(LED_ERROR, HIGH);
-          Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!\n\n\n\n\n\n");          
-        }
-        else {
-
+          Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!\n\n\n\n\n\n");   
+          counterDia --;
+          if(consumido_total <= custo_ESPERADO){//Verifica se o consumo total ainda está menor que o esperado pelo consumidor
+            custoPLAN_DIA = (custo_ESPERADO - consumido_total)/counterDia;
+          }
+          else{
+            Serial.println("\n\n\n\n\n\nInfelizmente é impossível cumprir com o consumo esperado ao final do mês!");
+            Serial.println("Já foi consumido o que era esperado em um mês\n\n\n\n\n\n");
+          }
         }
         consumido_DIA = 0;
+      }
+      if(counterDia == 0){//Testa se o período de um mês de monitoramento já foi atingido, para reinicia-lo
+        //Zera todas as variáveis...
+        counterDia = 30;
       }
       caseTR = 1;
       break;
   }
 
-  
   //Faz a verificação do horário para determinar qual o valor do horário em vigor
   tar = tarifa(timeinfo.tm_hour);//Futuramente será definido de forma online
   Serial.print("Valor do kWh: "); Serial.println(tar);
@@ -484,8 +482,9 @@ void setup() {
 
 void loop() {
   switch (estado) {//Funcionalidades
-    case f_medicao:
-
+    case f_medicao://Estado aonde é feita a mensuração da corrente, tensão, as potências ativas e reativas e o fator de potência
+    //Nesse estado também é realizado a verificação de possíveis erros dado a imprecisão do sensor de corrente.
+      Serial.println("Estado f_medicao");
       emon.calcVI(20, 2000);
       sV   = emon.Vrms;
       Irms = emon.calcIrms(1480);  // Calculate Irms only
@@ -502,7 +501,8 @@ void loop() {
       }
       break;
 
-    case incrementar:
+    case incrementar://Nesse estado é feito o cálculo do consumo em R$ e em kWh
+      Serial.println("Estado incrementar");
       if ((millis() - lastTime3) >= timerDelay3) {
         kWh = kWh + (rP / 3600) / 1000;
         consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
@@ -511,15 +511,17 @@ void loop() {
       estado = Enviar_TS;
       break;
 
-    case Enviar_TS:
+    case Enviar_TS://Envia para o ThingSpeak os dados de cada ciclo de leitura
+      Serial.println("Estado Enviar_TS");
       ThingSpeakPost();
       estado = printar;
       
       break;
 
-    case printar:
+    case printar://Printa as informações lidas e calculadas
       if ((millis() - lastTime2) >= timerDelay2)
       {
+        Serial.println("Estado printar");
         Serial.print(" Vrms: ");
         Serial.print(sV);
         Serial.print(" V     ");
@@ -540,17 +542,19 @@ void loop() {
         Serial.println(consumido_DIA * 1000000);
         Serial.println("rP , aP , Vrms , Irms , pF");
         estado = backupSD;
-        delay(400);
+        //delay(400);
         lastTime2 = millis();
       }
       break;
 
-    case backupSD:
+    case backupSD: //Faz o backup de todos os dados em um cartão SD
+      Serial.println("Estado backupSD");
       TIMERegister();
       estado = f_medicao;
       break;
 
     default :
+      Serial.println("Estado default");
       break;
   }
 }
