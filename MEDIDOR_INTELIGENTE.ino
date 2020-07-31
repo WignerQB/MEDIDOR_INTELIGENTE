@@ -1,7 +1,7 @@
 /*
- * Versao 5  
- * Comentado os cases do código e algumas outras linhas de código para auxiliar na interpretação
- * Inicializada a lógica de recalculamento da meta diária de consumo
+ * Versao 6  
+ * Ao atingir o perído de um mês de consumo monitorado é zerado algumas variáveis
+ * 
 */
 #include <ThingSpeak.h>
 #include "EmonLib.h"
@@ -259,8 +259,13 @@ void TIMERegister() {
       if(counterDia == 0){//Testa se o período de um mês de monitoramento já foi atingido, para reinicia-lo
         //Zera todas as variáveis...
         counterDia = 30;
+        caseTR = 0;
+        consumido_DIA = 0; 
+        consumido_total = 0;
       }
-      caseTR = 1;
+      else{//Se por acaso não atingiu o período de um mês de consumo, continua o código normalmente
+        caseTR = 1; 
+      }
       break;
   }
 
@@ -403,7 +408,6 @@ void appendFile(fs::FS &fs, const char * path, const String message) {
   file.close();
 }
 
-
 void ThingSpeakPost() {
   if ((millis() - lastTime) > timerDelay) {
 
@@ -423,7 +427,7 @@ void ThingSpeakPost() {
     ThingSpeak.setField(3, consumido_total);          //Envia o valor do consumo total em R$
     ThingSpeak.setField(4, consumido_DIA);         //Envia o valor do consumo em R$
     ThingSpeak.setField(5, kWh);      //Envia o valor do consumo em kWh
-    ThingSpeak.setField(6, tar);         //Envia o valor do kWh do horário em questão
+    ThingSpeak.setField(6, pF);         //Envia o valor do fator de potência
 
     int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);   // Escrever no canal do ThingSpeak
     if (x == 200) {
@@ -484,7 +488,7 @@ void loop() {
   switch (estado) {//Funcionalidades
     case f_medicao://Estado aonde é feita a mensuração da corrente, tensão, as potências ativas e reativas e o fator de potência
     //Nesse estado também é realizado a verificação de possíveis erros dado a imprecisão do sensor de corrente.
-      Serial.println("Estado f_medicao");
+      //Serial.println("Estado f_medicao");
       emon.calcVI(20, 2000);
       sV   = emon.Vrms;
       Irms = emon.calcIrms(1480);  // Calculate Irms only
@@ -502,7 +506,7 @@ void loop() {
       break;
 
     case incrementar://Nesse estado é feito o cálculo do consumo em R$ e em kWh
-      Serial.println("Estado incrementar");
+      //Serial.println("Estado incrementar");
       if ((millis() - lastTime3) >= timerDelay3) {
         kWh = kWh + (rP / 3600) / 1000;
         consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
@@ -512,16 +516,15 @@ void loop() {
       break;
 
     case Enviar_TS://Envia para o ThingSpeak os dados de cada ciclo de leitura
-      Serial.println("Estado Enviar_TS");
+      //Serial.println("Estado Enviar_TS");
       ThingSpeakPost();
       estado = printar;
-      
       break;
 
     case printar://Printa as informações lidas e calculadas
       if ((millis() - lastTime2) >= timerDelay2)
       {
-        Serial.println("Estado printar");
+        //Serial.println("Estado printar");
         Serial.print(" Vrms: ");
         Serial.print(sV);
         Serial.print(" V     ");
@@ -548,13 +551,13 @@ void loop() {
       break;
 
     case backupSD: //Faz o backup de todos os dados em um cartão SD
-      Serial.println("Estado backupSD");
+      //Serial.println("Estado backupSD");
       TIMERegister();
       estado = f_medicao;
       break;
 
     default :
-      Serial.println("Estado default");
+      //Serial.println("Estado default");
       break;
   }
 }
