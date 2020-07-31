@@ -1,7 +1,6 @@
 /*
- * Versao 6  
- * Ao atingir o perído de um mês de consumo monitorado é zerado algumas variáveis
- * 
+ * Versao 7
+ * Versão para simulação do funcionamento do medidor ao longo do tempo
 */
 #include <ThingSpeak.h>
 #include "EmonLib.h"
@@ -45,11 +44,11 @@ const long  gmtOffset_sec = -3;
 //nao esqueca de ajustar o fuso
 const int   daylightOffset_sec = -3600 * 3;
 
-unsigned long timerDelay = 10000, timerDelay2 = 1000, timerDelay3 = 1000;
-unsigned long lastTime = 0, lastTime2 = 0, lastTime3 = 0;
+unsigned long timerDelay = 10000, timerDelay2 = 1000, timerDelay3 = 1000, timerDelay4 = 300000, timerDelay5 = 1000 ;
+unsigned long lastTime = 0, lastTime2 = 0, lastTime3 = 0, lastTime4 = 0, lastTime5;
 
 String dataread, dateRegister;
-float kWh, sV, pF, aP, rP;
+float kWh, sV, pF, aP, rP, kWhMediaPMin = 0;
 double Irms;
 
 /*
@@ -72,11 +71,19 @@ int blue = 33, green = 32, LED_ERROR = 2, PLAN_ERROR = 0;
 
 int sumrec_consumido_DIA[500], sumrec_kWh[500], sumrec_marc_dia[500], agrupar_marc_dia = 0, agrupar_consumido_DIA = 0, agrupar_kWh = 0;
 int sumrec_consumido_total[500], agrupar_consumido_total = 0;
-int i = 0 , j, caseTR = 0;
+int i = 0 , j, caseTR = 0, jump = 0;
+
+
+/*Conjunto de variáveis que simularão o tempo decorrido
+ * 
+*/
+
+int minutos = 0, horas = 0, dia = 1, mes = 1;
 
 enum ENUM {
   f_medicao,
   incrementar,
+  incrementar2,
   Enviar_TS,
   backupSD,
   printar
@@ -271,6 +278,71 @@ void TIMERegister() {
 
   //Faz a verificação do horário para determinar qual o valor do horário em vigor
   tar = tarifa(timeinfo.tm_hour);//Futuramente será definido de forma online
+  Serial.print("Valor do kWh: "); Serial.println(tar);
+  Serial.print("\nConsumo médio por dia: "); Serial.println(custoPLAN_DIA);
+}
+
+void TIMERegister2() {
+  if((millis() - lastTime5) >= 1000){
+    minutos = minutos + 1;
+  }
+  if(minutos >= 60){
+    horas = horas + 1;
+    minutos = 0;
+  }
+  if(horas >= 24){
+    dia = dia + 1;
+    horas = 0;
+  }
+  if(dia >= 31){
+    dia = 0;
+  }
+ 
+  switch (caseTR) {
+    case 0: //Todas as tarefas que só são necessárias serem feitas 1 vez, salvo alguma exceção
+      marc_dia = dia;
+      //Verifica o mês que está em vigor para definir o consumo médio diário
+      custoPLAN_DIA = custo_ESPERADO / 30;
+      caseTR = 1;
+      break;
+
+    case 1: //Gerenciamento do consumo de energia
+      if (marc_dia != dia) { //Verifica se houve a mudança de dia e atualiza a variável que faz o controle e o arquivo txt
+        marc_dia = dia;
+        counterDia --; 
+        consumido_total = consumido_total + consumido_DIA;//Incrementa na variável que contabiliza o consumo geral, em R$, a quantidade 
+        //consumida no mês
+    
+        if (consumido_DIA > custoPLAN_DIA) {//Sinaliza ao consumidor que este consumiu em um mais que o ideal e refaz os cálculos necessários
+          //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------
+          digitalWrite(LED_ERROR, HIGH);
+          Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!\n\n\n\n\n\n");   
+          counterDia --;
+          if(consumido_total <= custo_ESPERADO){//Verifica se o consumo total ainda está menor que o esperado pelo consumidor
+            custoPLAN_DIA = (custo_ESPERADO - consumido_total)/counterDia;
+          }
+          else{
+            Serial.println("\n\n\n\n\n\nInfelizmente é impossível cumprir com o consumo esperado ao final do mês!");
+            Serial.println("Já foi consumido o que era esperado em um mês\n\n\n\n\n\n");
+          }
+        }
+        consumido_DIA = 0;
+      }
+      if(counterDia == 0){//Testa se o período de um mês de monitoramento já foi atingido, para reinicia-lo
+        //Zera todas as variáveis...
+        counterDia = 30;
+        caseTR = 0;
+        consumido_DIA = 0; 
+        consumido_total = 0;
+      }
+      else{//Se por acaso não atingiu o período de um mês de consumo, continua o código normalmente
+        caseTR = 1; 
+      }
+      break;
+  }
+
+  //Faz a verificação do horário para determinar qual o valor do horário em vigor
+  tar = tarifa(horas);//Futuramente será definido de forma online
   Serial.print("Valor do kWh: "); Serial.println(tar);
   Serial.print("\nConsumo médio por dia: "); Serial.println(custoPLAN_DIA);
 }
@@ -478,6 +550,7 @@ void setup() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
 
+  lastTime4 = millis();
   lastTime3 = millis();
   lastTime2 = millis();
   lastTime = millis();
@@ -496,7 +569,12 @@ void loop() {
       aP = emon.apparentPower;
       pF = emon.powerFactor;
       if (rP >= 0) {
-        estado = incrementar;
+        if(jump == 0){//Se ainda não foi feita a estimativa do consumo de kWh por min
+          estado = incrementar;
+        }
+        else{//Se já foi feita a estimativa do consumo de kWh por min
+          estado = incrementar2;
+        }
       }
       else {
         digitalWrite(LED_ERROR, HIGH);
@@ -509,10 +587,29 @@ void loop() {
       //Serial.println("Estado incrementar");
       if ((millis() - lastTime3) >= timerDelay3) {
         kWh = kWh + (rP / 3600) / 1000;
+        kWhMediaPMin = kWhMediaPMin + (rP / 3600) / 1000;
         consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
         lastTime3 = millis();
       }
-      estado = Enviar_TS;
+      if((millis() - lastTime4)>=timerDelay4){
+        kWhMediaPMin = kWhMediaPMin/5;
+        kWh = 0;
+        estado = incrementar2;
+        jump = 1;
+        lastTime5 = millis();
+      }
+      else{
+       estado = Enviar_TS; 
+      }
+      break;
+
+    case incrementar2:
+       if ((millis() - lastTime3) >= timerDelay3) {
+        kWh = kWh + kWhMediaPMin;//Passa a incrementar somente esse valor
+        consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
+        lastTime3 = millis();
+      }      
+      
       break;
 
     case Enviar_TS://Envia para o ThingSpeak os dados de cada ciclo de leitura
@@ -552,8 +649,14 @@ void loop() {
 
     case backupSD: //Faz o backup de todos os dados em um cartão SD
       //Serial.println("Estado backupSD");
-      TIMERegister();
-      estado = f_medicao;
+      if(jump == 0){
+        TIMERegister();
+        estado = f_medicao;
+      }
+      else{
+        TIMERegister2();
+        estado = incrementar2;
+      }
       break;
 
     default :
