@@ -1,6 +1,6 @@
 /*
- * Versao 7
- * Versão para simulação do funcionamento do medidor ao longo do tempo
+ * Versao 8
+ * Correções na versão para simulação do funcionamento do medidor ao longo do tempo
 */
 #include <ThingSpeak.h>
 #include "EmonLib.h"
@@ -44,11 +44,11 @@ const long  gmtOffset_sec = -3;
 //nao esqueca de ajustar o fuso
 const int   daylightOffset_sec = -3600 * 3;
 
-unsigned long timerDelay = 10000, timerDelay2 = 1000, timerDelay3 = 1000, timerDelay4 = 300000, timerDelay5 = 1000 ;
+unsigned long timerDelay = 10000, timerDelay2 = 1000, timerDelay3 = 1000, timerDelay4 = 60000, timerDelay5 = 1000 ;
 unsigned long lastTime = 0, lastTime2 = 0, lastTime3 = 0, lastTime4 = 0, lastTime5;
 
 String dataread, dateRegister;
-float kWh, sV, pF, aP, rP, kWhMediaPMin = 0;
+float kWh, sV, pF, aP, rP, kWhMediaPMin = 0, rPA;
 double Irms;
 
 /*
@@ -56,11 +56,11 @@ double Irms;
    tarHI: de 17 hrs as 18 hrs e de 21 hrs a 22 hrs
    tarHFP: O restante
    custo_ESPERADO: consumo esperado a ser pago pelo consumidor
-   custoPLAN_DIA: consumo em R$ planejado por dia
+   MetaDiaria: consumo em R$ planejado por dia
    consumido_total: consumo total da energia em R$
    consumido_DIA: O quanto foi consumido durante um dia
 */
-float custo_ESPERADO = 10.50, custoPLAN_DIA, consumido_DIA = 0, consumido_total = 0, tar;//Todos valores simulados
+float custo_ESPERADO = 10.50, MetaDiaria, consumido_DIA = 0, consumido_total = 0, tar;//Todos valores simulados
 int counterDia = 30, marc_dia, flag_setup = 0;
 
 int blue = 33, green = 32, LED_ERROR = 2, PLAN_ERROR = 0;
@@ -71,14 +71,14 @@ int blue = 33, green = 32, LED_ERROR = 2, PLAN_ERROR = 0;
 
 int sumrec_consumido_DIA[500], sumrec_kWh[500], sumrec_marc_dia[500], agrupar_marc_dia = 0, agrupar_consumido_DIA = 0, agrupar_kWh = 0;
 int sumrec_consumido_total[500], agrupar_consumido_total = 0;
-int i = 0 , j, caseTR = 0, jump = 0;
+int i = 0 , j, caseTR = 0, caseTR2 = 0, jump = 0;
 
 
 /*Conjunto de variáveis que simularão o tempo decorrido
  * 
 */
 
-int minutos = 0, horas = 0, dia = 1, mes = 1;
+int minutos = 0, horas = 0, dia = 1, mes = 1, MinProp = 20;
 
 enum ENUM {
   f_medicao,
@@ -222,7 +222,7 @@ void TIMERegister() {
       marc_dia = timeinfo.tm_mday;
       writeFile(SD, "/marc_dia.txt", String(marc_dia));
       //Verifica o mês que está em vigor para definir o consumo médio diário
-      custoPLAN_DIA = custo_ESPERADO / 30;
+      MetaDiaria = custo_ESPERADO / 30;
       caseTR = 1;
       break;
 
@@ -248,13 +248,14 @@ void TIMERegister() {
         consumido_total = consumido_total + consumido_DIA;//Incrementa na variável que contabiliza o consumo geral, em R$, a quantidade 
         //consumida no mês
     
-        if (consumido_DIA > custoPLAN_DIA) {//Sinaliza ao consumidor que este consumiu em um mais que o ideal e refaz os cálculos necessários
+        if (consumido_DIA > MetaDiaria) {//Sinaliza ao consumidor que este consumiu em um mais que o ideal e refaz os cálculos necessários
           //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------
           digitalWrite(LED_ERROR, HIGH);
-          Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!\n\n\n\n\n\n");   
+          Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!");           
+          Serial.println("Meta de consumo: " + String(MetaDiaria) + "/ Consumido: " + String(consumido_DIA) + "\n\n\n\n\n\n");   
           counterDia --;
           if(consumido_total <= custo_ESPERADO){//Verifica se o consumo total ainda está menor que o esperado pelo consumidor
-            custoPLAN_DIA = (custo_ESPERADO - consumido_total)/counterDia;
+            MetaDiaria = (custo_ESPERADO - consumido_total)/counterDia;
           }
           else{
             Serial.println("\n\n\n\n\n\nInfelizmente é impossível cumprir com o consumo esperado ao final do mês!");
@@ -279,12 +280,12 @@ void TIMERegister() {
   //Faz a verificação do horário para determinar qual o valor do horário em vigor
   tar = tarifa(timeinfo.tm_hour);//Futuramente será definido de forma online
   Serial.print("Valor do kWh: "); Serial.println(tar);
-  Serial.print("\nConsumo médio por dia: "); Serial.println(custoPLAN_DIA);
+  Serial.print("\nConsumo médio por dia: "); Serial.println(MetaDiaria);
 }
 
 void TIMERegister2() {
   if((millis() - lastTime5) >= 1000){
-    minutos = minutos + 1;
+    minutos = minutos + MinProp;
   }
   if(minutos >= 60){
     horas = horas + 1;
@@ -298,28 +299,30 @@ void TIMERegister2() {
     dia = 0;
   }
  
-  switch (caseTR) {
+  switch (caseTR2) {
     case 0: //Todas as tarefas que só são necessárias serem feitas 1 vez, salvo alguma exceção
       marc_dia = dia;
       //Verifica o mês que está em vigor para definir o consumo médio diário
-      custoPLAN_DIA = custo_ESPERADO / 30;
-      caseTR = 1;
+      MetaDiaria = custo_ESPERADO / 30;
+      caseTR2 = 1;
       break;
 
     case 1: //Gerenciamento do consumo de energia
       if (marc_dia != dia) { //Verifica se houve a mudança de dia e atualiza a variável que faz o controle e o arquivo txt
+        Serial.println("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
         marc_dia = dia;
         counterDia --; 
         consumido_total = consumido_total + consumido_DIA;//Incrementa na variável que contabiliza o consumo geral, em R$, a quantidade 
         //consumida no mês
     
-        if (consumido_DIA > custoPLAN_DIA) {//Sinaliza ao consumidor que este consumiu em um mais que o ideal e refaz os cálculos necessários
+        if (consumido_DIA > MetaDiaria) {//Sinaliza ao consumidor que este consumiu em um mais que o ideal e refaz os cálculos necessários
           //Falta lógica ainda-------------------------------------------------------------------------------------------------------------------
           digitalWrite(LED_ERROR, HIGH);
-          Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!\n\n\n\n\n\n");   
+          Serial.println("\n\n\n\n\n\nConsumiu além do planejado!!!");           
+          Serial.println("Meta de consumo: " + String(MetaDiaria) + "/ Consumido: " + String(consumido_DIA) + "\n\n\n\n\n\n");
           counterDia --;
           if(consumido_total <= custo_ESPERADO){//Verifica se o consumo total ainda está menor que o esperado pelo consumidor
-            custoPLAN_DIA = (custo_ESPERADO - consumido_total)/counterDia;
+            MetaDiaria = (custo_ESPERADO - consumido_total)/counterDia;
           }
           else{
             Serial.println("\n\n\n\n\n\nInfelizmente é impossível cumprir com o consumo esperado ao final do mês!");
@@ -331,20 +334,20 @@ void TIMERegister2() {
       if(counterDia == 0){//Testa se o período de um mês de monitoramento já foi atingido, para reinicia-lo
         //Zera todas as variáveis...
         counterDia = 30;
-        caseTR = 0;
+        caseTR2 = 0;
         consumido_DIA = 0; 
         consumido_total = 0;
       }
       else{//Se por acaso não atingiu o período de um mês de consumo, continua o código normalmente
-        caseTR = 1; 
+        caseTR2 = 1; 
       }
       break;
   }
-
+  Serial.println("Dia: " + String(dia) + " Horas:" + String(horas) + ":" + String(minutos) + "--" + String(caseTR2));
   //Faz a verificação do horário para determinar qual o valor do horário em vigor
   tar = tarifa(horas);//Futuramente será definido de forma online
   Serial.print("Valor do kWh: "); Serial.println(tar);
-  Serial.print("\nConsumo médio por dia: "); Serial.println(custoPLAN_DIA);
+  Serial.print("\nConsumo médio por dia: "); Serial.println(MetaDiaria);
 }
 
 void readFile(fs::FS &fs) {
@@ -500,6 +503,8 @@ void ThingSpeakPost() {
     ThingSpeak.setField(4, consumido_DIA);         //Envia o valor do consumo em R$
     ThingSpeak.setField(5, kWh);      //Envia o valor do consumo em kWh
     ThingSpeak.setField(6, pF);         //Envia o valor do fator de potência
+    ThingSpeak.setField(7, MetaDiaria);         //Envia o valor da meta diária de consumo
+    ThingSpeak.setField(8, tar);         //Envia o valor do kWh conforme o horário em vigor
 
     int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);   // Escrever no canal do ThingSpeak
     if (x == 200) {
@@ -588,11 +593,12 @@ void loop() {
       if ((millis() - lastTime3) >= timerDelay3) {
         kWh = kWh + (rP / 3600) / 1000;
         kWhMediaPMin = kWhMediaPMin + (rP / 3600) / 1000;
+        rPA = rP;
         consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
         lastTime3 = millis();
       }
       if((millis() - lastTime4)>=timerDelay4){
-        kWhMediaPMin = kWhMediaPMin/5;
+        kWhMediaPMin = kWhMediaPMin;
         kWh = 0;
         estado = incrementar2;
         jump = 1;
@@ -605,11 +611,11 @@ void loop() {
 
     case incrementar2:
        if ((millis() - lastTime3) >= timerDelay3) {
-        kWh = kWh + kWhMediaPMin;//Passa a incrementar somente esse valor
-        consumido_DIA = consumido_DIA + ((rP / 3600) / 1000) * tar;
+        kWh = kWh + kWhMediaPMin*MinProp;//Passa a incrementar somente esse valor
+        consumido_DIA = consumido_DIA +  kWhMediaPMin*MinProp*60*tar*(rP/rPA);
         lastTime3 = millis();
       }      
-      
+      estado = Enviar_TS;
       break;
 
     case Enviar_TS://Envia para o ThingSpeak os dados de cada ciclo de leitura
@@ -651,12 +657,13 @@ void loop() {
       //Serial.println("Estado backupSD");
       if(jump == 0){
         TIMERegister();
-        estado = f_medicao;
+        
       }
       else{
         TIMERegister2();
-        estado = incrementar2;
+       
       }
+      estado = f_medicao;
       break;
 
     default :
