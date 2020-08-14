@@ -13,7 +13,8 @@
 #include <SPI.h>
 
 
-/*Pinagem do módulo SD na ESP32
+/*
+ * Pinagem do módulo SD na ESP32
    CS: D5
    SCK:D18
    MOSI:D23
