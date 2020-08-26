@@ -1,7 +1,7 @@
 /*
- * Versao 9
- * Renomeação das variáveis 
- * Parei de ficar enviando informação para o campo 8
+ * Versao 10
+ * Defini como R$ 10,00 a meta de consumo mensal
+ * Retirei a funcao de adicionar informacoes no SD, ficou somente a de escrever
 */
 #include <ThingSpeak.h>
 #include "EmonLib.h"
@@ -11,7 +11,7 @@
 #include "FS.h"
 #include "SD.h"
 #include <SPI.h>
-
+#include <WiFi.h>
 
 /*Pinagem do módulo SD na ESP32
    CS: D5
@@ -31,7 +31,7 @@
 // Essas informações são de um canal publico que eu criei, pode usar se precisar:
 // (Acesso: https://thingspeak.com/channels/1076260)
 unsigned long myChannelNumber = 1076260; //ID DO CANAL
-const char * myWriteAPIKey = "UICL5S86IO3X0NQF";
+const char * myWriteAPIKey = "3UDTQ37LCACJAF5X";
 
 const char* ssid       = "WIGNER";
 const char* password   = "wigner123";
@@ -45,10 +45,9 @@ const long  gmtOffset_sec = -3;
 //nao esqueca de ajustar o fuso
 const int   daylightOffset_sec = -3600 * 3;
 
-unsigned long timerDelay = 10000, timerDelay2 = 1000, timerDelay3 = 1000;
+unsigned long timerDelay = 20000, timerDelay2 = 1000, timerDelay3 = 1000;
 unsigned long lastTime = 0, lastTime2 = 0, lastTime3 = 0;
 
-String dataread, dateRegister;
 float kWh, TensaoAlimentacao, FatorPotencia, PotenciaAparente, PotenciaReal;
 double Irms;
 
@@ -62,7 +61,7 @@ double Irms;
    ConsumoDiario: O quanto foi consumido durante um dia
 */
 
-float ConsumoEsperado = 10.50, MetaDiaria, ConsumoDiario = 0, ConsumoTotal = 0, ValorDokWh;//Todos valores simulados
+float ConsumoEsperado = 10.00, MetaDiaria, ConsumoDiario = 0, ConsumoTotal = 0, ValorDokWh;//Todos valores simulados
 int ContadorDeDias = 30, DiaAtual, flag_setup = 0;
 
 int blue = 33, green = 32, LedDeErro = 2, ErroNoPlanejamento = 0;
@@ -112,19 +111,6 @@ void SD_config() {
   //Ler os arquivos a fim de pegar os valores armazenados
   readFile(SD);
 
-
-  // If the data.txt file doesn't exist
-  // Create a file on the SD card and write the data labels
-  File file = SD.open("/data.txt");
-  if (!file) {
-    Serial.println("File doens't exist");
-    Serial.println("Creating file...");
-    appendFile(SD, "/data.txt", "Date| Hour| Mensage \r\n");
-  }
-  else {
-    Serial.println("File already exists");
-  }
-  file.close();
   //-----------------------------------------------------------
   // Create a file on the SD card and write kWh
   File file_kWh = SD.open("/kWh.txt");
@@ -199,11 +185,6 @@ void TIMERegister() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
     Serial.println("Falha ao obter a hora");
-    dateRegister = String(timeinfo.tm_mday) + "/" + String(timeinfo.tm_mon + 1)   + "/" + String(timeinfo.tm_year + 1900) + " - " + String(timeinfo.tm_hour) + ":" + String(timeinfo.tm_min) + ":" + String(timeinfo.tm_sec);
-    Serial.println(dateRegister);
-    dataread = "Vrms: " + String(TensaoAlimentacao) + " V; " + "Irms: " + String(Irms) + " A; " + "Fator de Potência: " + String(FatorPotencia) + "; Potência Real: " + String(PotenciaReal) + " W; " + "Apparent Power: " + String(PotenciaAparente) + " VA; " + "Energia consumida: " + String(kWh);
-
-    appendFile(SD, "/data.txt", dateRegister + "\t" + dataread + "\r\n");
     writeFile(SD, "/kWh.txt", String((int)(kWh * 1000000)));
     writeFile(SD, "/ConsumoDiario.txt", String((int)(ConsumoDiario * 1000000)));
     writeFile(SD, "/ConsumoTotal.txt", String((int)(ConsumoTotal * 1000000)));
@@ -223,11 +204,7 @@ void TIMERegister() {
     case 1://Salva as informações no SD
       Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
       //Mes/dia/ano - H:M:S
-      dateRegister = String(timeinfo.tm_mday) + "/" + String(timeinfo.tm_mon + 1)   + "/" + String(timeinfo.tm_year + 1900) + " - " + String(timeinfo.tm_hour) + ":" + String(timeinfo.tm_min) + ":" + String(timeinfo.tm_sec);
-      Serial.println(dateRegister);
-      dataread = "Vrms: " + String(TensaoAlimentacao) + " V; " + "Irms: " + String(Irms) + " A; " + "Fator de Potência: " + String(FatorPotencia) + "; Potência Real: " + String(PotenciaReal) + " W; " + "Apparent Power: " + String(PotenciaAparente) + " VA; " + "Energia consumida: " + String(kWh);
-
-      appendFile(SD, "/data.txt", dateRegister + "\t" + dataread + "\r\n");
+      
       writeFile(SD, "/kWh.txt", String((int)(kWh * 1000000)));
       writeFile(SD, "/ConsumoDiario.txt", String((int)(ConsumoDiario * 1000000)));
       writeFile(SD, "/ConsumoTotal.txt", String((int)(ConsumoTotal * 1000000)));
@@ -372,6 +349,7 @@ void writeFile(fs::FS &fs, const char * path, const String message) {
   //verifica se foi possivel criar o arquivo
   if (!file) {
     Serial.println("Failed to open file for writing");
+    digitalWrite(blue,LOW);
     return;
   }
   /*grava o parâmetro "message" no arquivo. Como a função print
@@ -379,35 +357,13 @@ void writeFile(fs::FS &fs, const char * path, const String message) {
     saber se houve erro durante o processo.*/
   if (file.print(message)) {
     Serial.println("File written");
-  } else {
-    Serial.println("Write failed");
-  }
-}
-
-// Append to the SD card (DON'T MODIFY THIS FUNCTION)
-void appendFile(fs::FS &fs, const char * path, const String message) {
-  if (path[0] != '/') {
-    Serial.println("File path needs start with /. Change it.");
-  }
-
-  Serial.printf("Appending to file: %s\n", path);
-
-  File file = fs.open(path, FILE_APPEND);
-  if (!file) {
-    Serial.println("Failed to open file for appending");
-    digitalWrite(blue, LOW);
-    return;
-  }
-
-  if (file.print(message)) {
-    Serial.println("Message appended");
     digitalWrite(blue, HIGH);
   } else {
-    Serial.println("Append failed");
+    Serial.println("Write failed");
     digitalWrite(blue, LOW);
   }
-  file.close();
 }
+
 
 void ThingSpeakPost() {
   if ((millis() - lastTime) > timerDelay) {
@@ -476,6 +432,7 @@ void setup() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   SD_config();
   TIMERegister();
+  server.begin();
   ThingSpeak.begin(client);  // Initialize ThingSpeak
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
